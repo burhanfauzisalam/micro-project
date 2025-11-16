@@ -7,7 +7,7 @@
 #include <ArduinoJson.h>
 
 // =========================
-// PIN DEFINISI ESP32
+// PIN ESP32
 // =========================
 #define LED_RED 12
 #define LED_GREEN 14
@@ -17,51 +17,83 @@
 #define SDA_PIN 21
 #define SCL_PIN 22
 
-// === PIN PN532 (MODE I2C) ===
+// PN532
 #define PN532_IRQ   2
 #define PN532_RESET 15
 
-// =========================
-// OBJEK
-// =========================
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // =========================
-// KONFIG API
+// KARTU SPESIAL
 // =========================
-const char* api_url = "http://192.168.229.69/sdkhadijah-apps/api/attendance/register-card";
+const String WIFI_RESET_CARD = "09E6C701";
+const String MODE_SWITCH_CARD = "E2FEFD03"; // GANTI ke UID mode Anda
+
+// =========================
+// MODE & API URL
+// =========================
+int currentMode = 2;
+
+const char* api_url_mode1 = "http://192.168.229.69/sdkhadijah-apps/api/attendance/register-card";
+const char* api_url_mode2 = "http://192.168.229.69/sdkhadijah-apps/api/attendance/scan";
+
 const char* deviceId = "sdkhw1";
 
 // =========================
-// SCROLL TEXT (LCD)
+// SCROLL LCD
 // =========================
-void scrollText(LiquidCrystal_I2C &lcd, int row, String text, int delayTime = 250) {
-  int len = text.length();
+void scrollText(int row, String text, int speed = 250) {
+  lcd.setCursor(0, row);
 
-  if (len <= 16) {
-    lcd.setCursor(0, row);
+  if (text.length() <= 16) {
     lcd.print(text);
     return;
   }
 
-  for (int pos = 0; pos <= len - 16; pos++) {
+  for (int i = 0; i <= text.length() - 16; i++) {
     lcd.setCursor(0, row);
-    lcd.print(text.substring(pos, pos + 16));
-    delay(delayTime);
+    lcd.print(text.substring(i, i + 16));
+    delay(speed);
   }
+}
+
+// =========================
+// READY SCREEN
+// =========================
+void showReadyScreen() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+
+  if (currentMode == 1) lcd.print("Pendaftaran");
+  else lcd.print("Absensi");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Scan Kartu...");
+}
+
+// =========================
+// TAMPILKAN MODE
+// =========================
+void showMode() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Mode Sekarang:");
+
+  lcd.setCursor(0, 1);
+  if (currentMode == 1) lcd.print("Pendaftaran");
+  else lcd.print("Absensi");
+
+  delay(2000);
 }
 
 // =========================
 // BUZZER
 // =========================
 void bipBip() {
-  digitalWrite(BUZZER, HIGH);
-  delay(250);
-  digitalWrite(BUZZER, LOW);
-  delay(150);
-  digitalWrite(BUZZER, HIGH);
-  delay(250);
+  digitalWrite(BUZZER, HIGH); delay(250);
+  digitalWrite(BUZZER, LOW);  delay(150);
+  digitalWrite(BUZZER, HIGH); delay(250);
   digitalWrite(BUZZER, LOW);
 }
 
@@ -77,18 +109,13 @@ void setup() {
   pinMode(BUZZER, OUTPUT);
 
   digitalWrite(LED_RED, HIGH);
-  digitalWrite(LED_GREEN, LOW);
-  digitalWrite(LED_YELLOW, LOW);
-  digitalWrite(BUZZER, LOW);
 
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0, 0);
   lcd.print("Mulai WiFi...");
 
-  // WiFi Manager
-  WiFiManager wifiManager;
-  if (!wifiManager.autoConnect("ESP32-RFID")) {
+  WiFiManager wm;
+  if (!wm.autoConnect("ESP32-RFID")) {
     lcd.clear();
     lcd.print("WiFi gagal!");
     delay(2000);
@@ -100,29 +127,103 @@ void setup() {
 
   lcd.clear();
   lcd.print("WiFi OK!");
-  lcd.setCursor(0, 1);
-  lcd.print(WiFi.localIP().toString());
+  lcd.setCursor(1, 1);
+  lcd.print(WiFi.localIP());
   delay(2000);
 
-  // I2C
   Wire.begin(SDA_PIN, SCL_PIN);
 
-  // PN532
   nfc.begin();
   if (!nfc.getFirmwareVersion()) {
     lcd.clear();
-    lcd.print("PN532 Error!");
-    Serial.println("PN532 tidak terdeteksi!");
-    while (1) delay(10);
+    lcd.print("PN532 ERROR!");
+    while (1);
   }
-
   nfc.SAMConfig();
 
+  showMode();
+  showReadyScreen();
+}
+
+// =========================
+// HANDLE RESPONSE MODE 1
+// =========================
+void handleMode1Response(StaticJsonDocument<256> &doc) {
+  String status = doc["status"].as<String>();
+
+  // SUCCESS
+  if (status == "success") {
+    lcd.clear();
+    lcd.print(doc["message"].as<String>());
+    digitalWrite(LED_GREEN, HIGH);
+    bipBip();
+    scrollText(1, doc["name"].as<String>());
+    delay(2000);
+    digitalWrite(LED_GREEN, LOW);
+    return;
+  }
+
+  // NO STUDENT
+  if (doc["error_code"] == "NO_STUDENT") {
+    lcd.clear();
+    lcd.print("Gagal!");
+    digitalWrite(LED_RED, HIGH);
+    bipBip();
+    scrollText(1, doc["message"].as<String>());
+    digitalWrite(LED_RED, LOW);
+    return;
+  }
+
+  // ALREADY REGISTERED
+  if (doc["error_code"] == "ALREADY_REGISTERED") {
+    lcd.clear();
+    lcd.print(doc["message"].as<String>());
+    digitalWrite(LED_RED, HIGH);
+    bipBip();
+    scrollText(1, doc["name"].as<String>());
+    delay(2000);
+    digitalWrite(LED_RED, LOW);
+    return;
+  }
+
+  // UNKNOWN
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Ready...");
-  lcd.setCursor(0, 1);
-  lcd.print("Scan Kartu...");
+  lcd.print("Error API");
+  scrollText(1, "Kesalahan tidak dikenal");
+}
+
+// =========================
+// HANDLE RESPONSE MODE 2
+// =========================
+void handleMode2Response(StaticJsonDocument<256> &doc) {
+  String status = doc["status"].as<String>();
+
+  // SUCCESS
+  if (status == "success") {
+    lcd.clear();
+    lcd.print(doc["message"].as<String>());
+    digitalWrite(LED_GREEN, HIGH);
+    bipBip();
+    scrollText(1, doc["name"].as<String>());
+    delay(2000);
+    digitalWrite(LED_GREEN, LOW);
+    return;
+  }
+
+  // ALREADY
+  if (doc["error_code"] == "ALREADY") {
+    lcd.clear();
+    lcd.print(doc["message"].as<String>());
+    digitalWrite(LED_GREEN, HIGH);
+    bipBip();
+    scrollText(1, doc["name"].as<String>());
+    delay(2000);
+    digitalWrite(LED_GREEN, LOW);
+    return;
+  }
+
+  lcd.clear();
+  lcd.print("Error API");
 }
 
 // =========================
@@ -130,196 +231,101 @@ void setup() {
 // =========================
 void loop() {
 
-  // Status LED WiFi
-  if (WiFi.status() != WL_CONNECTED) {
-    digitalWrite(LED_RED, HIGH);
-    digitalWrite(LED_YELLOW, LOW);
-  } else {
-    digitalWrite(LED_RED, LOW);
-    digitalWrite(LED_YELLOW, HIGH);
-  }
+  // LED status
+  digitalWrite(LED_RED, WiFi.status() != WL_CONNECTED);
+  digitalWrite(LED_YELLOW, WiFi.status() == WL_CONNECTED);
 
   uint8_t uid[7];
   uint8_t uidLength;
 
-  // =========================
-  // BACA KARTU RFID
-  // =========================
-  if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
-
-    // Convert UID ke HEX String
-    String uidString = "";
-    char buf[3];
-    for (uint8_t i = 0; i < uidLength; i++) {
-      sprintf(buf, "%02X", uid[i]);
-      uidString += String(buf);
-    }
-
-    Serial.println("Kartu: " + uidString);
-
-    lcd.setCursor(0, 1);
-    lcd.print("Memproses...     ");
-
-    // ===========================
-    // KARTU RESET WIFI
-    // ===========================
-    if (uidString == "09E6C701") {
-      Serial.println("Kartu Reset!");
-      lcd.setCursor(0, 1);
-      lcd.print("Reset WiFi...   ");
-
-      digitalWrite(BUZZER, HIGH); delay(200);
-      digitalWrite(BUZZER, LOW);
-
-      WiFi.disconnect(true, true);
-      delay(1000);
-      ESP.restart();
-    }
-
-    // ===========================
-    // KIRIM KE API
-    // ===========================
-    if (WiFi.status() == WL_CONNECTED) {
-      HTTPClient http;
-      http.begin(api_url);
-      http.addHeader("Content-Type", "application/json");
-
-      // JSON Payload
-      StaticJsonDocument<128> json;
-      json["rfid_uid"] = uidString;
-      json["device_name"] = deviceId;
-
-      String jsonPayload;
-      serializeJson(json, jsonPayload);
-
-      Serial.println("payload: " + jsonPayload);
-
-      int httpCode = http.POST(jsonPayload);
-
-      lcd.setCursor(0, 1);
-      lcd.print("                ");
-      lcd.setCursor(0, 1);
-
-      if (httpCode > 0) {
-        String response = http.getString();
-        Serial.println("RESPONSE: " + response);
-
-        StaticJsonDocument<256> doc;
-        DeserializationError err = deserializeJson(doc, response);
-
-        if (!err) {
-
-            String status = doc["status"].as<String>();
-
-            // =======================
-            // SUCCESS
-            // =======================
-            if (status == "success") {
-
-                String msg  = doc["message"].as<String>();
-                String name = doc["name"].as<String>();
-
-                lcd.clear();
-                lcd.setCursor(0, 0);
-                lcd.print(msg);
-
-                Serial.println("SUCCESS: " + msg);
-
-                digitalWrite(LED_GREEN, HIGH);
-                bipBip();
-
-                scrollText(lcd, 1, name);
-                delay(2000);
-
-                digitalWrite(LED_GREEN, LOW);
-            }
-
-            // =======================
-            // ERROR: NO_STUDENT
-            // =======================
-            else if (doc["error_code"] == "NO_STUDENT") {
-
-                String msg = doc["message"].as<String>();
-
-                lcd.clear();
-                lcd.setCursor(0, 0);
-                lcd.print("Gagal!");
-
-                Serial.println("ERROR NO_STUDENT: " + msg);
-
-                digitalWrite(LED_RED, HIGH);
-                bipBip();
-
-                scrollText(lcd, 1, msg);
-                delay(2000);
-
-                digitalWrite(LED_RED, LOW);
-            }
-
-            // =======================
-            // ERROR: CARD_REGISTERED
-            // =======================
-            else if (doc["error_code"] == "ALREADY_REGISTERED") {
-
-                String msg  = doc["message"].as<String>();
-                String name = doc["name"].as<String>();
-
-                lcd.clear();
-                lcd.setCursor(0, 0);
-                lcd.print(msg);
-
-                Serial.println("CARD_REGISTERED: " + msg);
-
-                digitalWrite(LED_RED, HIGH);
-                bipBip();
-
-                scrollText(lcd, 1, name);
-                delay(2000);
-
-                digitalWrite(LED_RED, LOW);
-            }
-
-            // =======================
-            // ERROR: Tidak dikenali
-            // =======================
-            else {
-                lcd.clear();
-                lcd.setCursor(0, 0);
-                lcd.print("Error API");
-
-                Serial.println("UNKNOWN ERROR");
-
-                scrollText(lcd, 1, "Kesalahan tidak dikenal");
-                delay(2000);
-            }
-
-        } else {
-            lcd.clear();
-            lcd.print("JSON Error!");
-            Serial.println("JSON PARSE ERROR");
-            delay(1500);
-        }
-
-    } else {
-        lcd.clear();
-        lcd.print("Gagal Kirim!");
-        Serial.printf("HTTP ERROR: %d\n", httpCode);
-        delay(1500);
-    }
-
-    http.end();
-
-    } else {
-      lcd.print("WiFi Error!");
-    }
-
-    // kembali ke mode scan kartu
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Ready...");
-    lcd.setCursor(0, 1);
-    lcd.print("Scan Kartu...");
+  if (!nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+    delay(20);
+    return;
   }
 
-  delay(50);
+  // Convert UID
+  String uidString = "";
+  for (uint8_t i = 0; i < uidLength; i++) {
+    char buf[3];
+    sprintf(buf, "%02X", uid[i]);
+    uidString += buf;
+  }
+
+  Serial.println("SCAN UID: " + uidString);
+  lcd.setCursor(0, 1);
+  lcd.print("Memproses...   ");
+
+  // ============ RESET WIFI ============
+  if (uidString == WIFI_RESET_CARD) {
+    lcd.clear();
+    lcd.print("Reset WiFi...");
+    WiFi.disconnect(true, true);
+    delay(1500);
+    ESP.restart();
+  }
+
+  // ============ GANTI MODE ============
+  if (uidString == MODE_SWITCH_CARD) {
+    currentMode = (currentMode == 1) ? 2 : 1;
+
+    lcd.clear();
+    lcd.print("Mode Diubah!");
+    lcd.setCursor(0, 1);
+    lcd.print(currentMode == 1 ? "Pendaftaran" : "Absensi");
+
+    Serial.println("MODE NOW: " + String(currentMode));
+
+    delay(2000);
+    showReadyScreen();
+    return;
+  }
+
+  // ============ KIRIM DATA ============
+  if (WiFi.status() != WL_CONNECTED) {
+    lcd.print("WiFi Error!");
+    delay(1500);
+    showReadyScreen();
+    return;
+  }
+
+  HTTPClient http;
+
+  // Tentukan URL berdasarkan mode
+  String url = (currentMode == 1) ? api_url_mode1 : api_url_mode2;
+
+  http.begin(url);
+  http.setTimeout(15000);
+  http.addHeader("Content-Type", "application/json");
+
+  // Payload
+  StaticJsonDocument<128> json;
+  json["rfid_uid"] = uidString;
+  json["device_name"] = deviceId;
+
+  String payload;
+  serializeJson(json, payload);
+
+  int httpCode = http.POST(payload);
+
+  if (httpCode > 0) {
+    String response = http.getString();
+    Serial.println(response);
+
+    StaticJsonDocument<256> doc;
+    if (!deserializeJson(doc, response)) {
+
+      if (currentMode == 1) handleMode1Response(doc);
+      else handleMode2Response(doc);
+
+    } else {
+      lcd.clear();
+      lcd.print("JSON Error!");
+    }
+  } else {
+    lcd.clear();
+    lcd.print("Gagal Kirim!");
+  }
+
+  http.end();
+  showReadyScreen();
 }
