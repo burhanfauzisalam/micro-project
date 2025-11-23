@@ -9,10 +9,17 @@
 // =========================
 // PIN ESP32
 // =========================
-#define LED_RED 12
-#define LED_GREEN 14
-#define LED_YELLOW 13
-#define BUZZER 33
+// #define LED_RED 12
+// #define LED_GREEN 14
+// #define LED_YELLOW 13
+// #define BUZZER 33
+
+#define LED_RED 4
+#define LED_GREEN 5
+#define LED_YELLOW 15
+#define BUZZER 19
+#define BUTTON_PIN 14
+unsigned long lastButtonPress = 0;
 
 #define SDA_PIN 21
 #define SCL_PIN 22
@@ -108,6 +115,7 @@ void setup() {
   pinMode(LED_YELLOW, OUTPUT);
   pinMode(BUZZER, OUTPUT);
 
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
   digitalWrite(LED_RED, HIGH);
 
   lcd.init();
@@ -234,6 +242,27 @@ void loop() {
   // LED status
   digitalWrite(LED_RED, WiFi.status() != WL_CONNECTED);
   digitalWrite(LED_YELLOW, WiFi.status() == WL_CONNECTED);
+
+  // =============================
+  // CEK TOMBOL MODE (GPIO 14)
+  // =============================
+  if (digitalRead(BUTTON_PIN) == LOW) {  
+    if (millis() - lastButtonPress > 600) { // debounce
+      lastButtonPress = millis();
+
+      currentMode = (currentMode == 1) ? 2 : 1;
+
+      lcd.clear();
+      lcd.print("Mode Diubah");
+      lcd.setCursor(0, 1);
+      lcd.print(currentMode == 1 ? "Pendaftaran" : "Absensi");
+
+      Serial.println("MODE CHANGE BTN: " + String(currentMode));
+
+      delay(1500);
+      showReadyScreen();
+    }
+  }
 
   uint8_t uid[7];
   uint8_t uidLength;
